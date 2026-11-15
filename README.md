@@ -1,0 +1,46 @@
+# RingBell
+
+Two Android apps in one Gradle project.
+
+| App | Package | Role |
+|---|---|---|
+| **Ring Client** (App A) | `app.ringbell.client` | Asks for a name on first run. Every later launch rings the host. Shows a **Cancel ring** button until the host dismisses. |
+| **Ring Host** (App B) | `app.ringbell.host` | Runs a background listener. Rings (looping alarm + vibration + full-screen alert) until you tap **Dismiss**. Shows who rang, plus history. |
+
+## How they talk
+
+No custom backend. Both apps use one [ntfy](https://ntfy.sh) topic as a message pipe:
+
+- client posts `ring` / `cancel` messages
+- host streams the topic, and posts `dismissed` back so the client can hide its Cancel button
+
+Config lives in `gradle.properties` (`RING_SERVER`, `RING_TOPIC`, `RING_TOKEN`).
+**Both apps must be built with the same values.** On public ntfy.sh the topic name is the only secret, so keep it long and random (a random one is already set). For a self-hosted server with auth, set `RING_SERVER` and `RING_TOKEN`.
+
+Override without editing the file:
+
+    ./gradlew :client:assembleDebug :host:assembleDebug -PRING_TOPIC=my-secret-topic
+
+## Build
+
+- **Android Studio**: open this folder, pick the `client` or `host` run configuration.
+- **CLI** (JDK 17 + Android SDK 35): `./gradlew :client:assembleDebug :host:assembleDebug`
+  APKs land in `client/build/outputs/apk/debug/` and `host/build/outputs/apk/debug/`.
+- **GitHub Actions**: push to a repo's `main`; `.github/workflows/build.yml` uploads both APKs as an artifact.
+
+## First run on the host phone
+
+Open Ring Host once. It starts the listener and shows a setup card; allow:
+
+1. Notifications
+2. Full-screen alerts (so it can pop over the lock screen on Android 14+)
+3. No battery restriction (so the connection survives Doze)
+
+After that it restarts itself on reboot. Samsung / Xiaomi / etc. may also need "Unrestricted" battery and "Auto-start" in system settings.
+
+## Behaviour notes
+
+- Rings that reach the host more than 2 minutes late (it was offline) are recorded as **Missed** instead of sounding.
+- Dismiss and cancel are idempotent; duplicate deliveries are ignored by ring id.
+- The alarm uses the system default alarm sound on the alarm volume stream; if that stream is muted it is raised to ~70 %.
+- The client only rings on a real launch (not on rotation), and the very first launch (name setup) does not ring.
