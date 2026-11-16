@@ -29,7 +29,7 @@ class RingWidget : AppWidgetProvider() {
         private fun buildViews(ctx: Context): RemoteViews {
             val name = savedName(ctx)
             val views = RemoteViews(ctx.packageName, R.layout.widget_ring)
-            views.setTextViewText(R.id.widget_sub, if (name != null) "as $name" else "Tap to set name")
+            views.setTextViewText(R.id.widget_sub, name ?: "Set name")
 
             val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             val tap = if (name != null) {
