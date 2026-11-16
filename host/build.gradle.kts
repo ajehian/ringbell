@@ -21,6 +21,16 @@ android {
         buildConfigField("String", "RING_TOPIC", "\"${prop("RING_TOPIC", "ringbell-change-me")}\"")
         buildConfigField("String", "RING_TOKEN", "\"${prop("RING_TOKEN", "")}\"")
     }
+    signingConfigs {
+        // Fixed key committed to the repo so every CI build is signed identically
+        // and new APKs install over old ones. Personal sideloading only.
+        getByName("debug") {
+            storeFile = rootProject.file("keystore/ringbell.jks")
+            storePassword = "ringbell"
+            keyAlias = "ringbell"
+            keyPassword = "ringbell"
+        }
+    }
     buildFeatures {
         compose = true
         buildConfig = true

@@ -44,3 +44,7 @@ After that it restarts itself on reboot. Samsung / Xiaomi / etc. may also need "
 - Dismiss and cancel are idempotent; duplicate deliveries are ignored by ring id.
 - The alarm uses the system default alarm sound on the alarm volume stream; if that stream is muted it is raised to ~70 %.
 - The client only rings on a real launch (not on rotation), and the very first launch (name setup) does not ring.
+
+## Signing
+
+`keystore/ringbell.jks` is a fixed signing key used for the debug builds, so every CI build has the same signature and new APKs install over old ones without uninstalling. It is public in this repo and meant for personal sideloading only, not for publishing to a store.
