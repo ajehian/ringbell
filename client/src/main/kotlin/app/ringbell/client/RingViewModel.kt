@@ -43,6 +43,7 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
         if (n.isEmpty()) return
         prefs.edit().putString("name", n).apply()
         _name.value = n
+        RingWidget.refreshAll(getApplication<Application>())
     }
 
     /**

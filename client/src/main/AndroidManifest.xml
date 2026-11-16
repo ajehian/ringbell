@@ -18,5 +18,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".RingWidget"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/ring_widget_info" />
+        </receiver>
+
+        <!-- Receives the widget tap. Not exported: only our own PendingIntent can reach it. -->
+        <receiver
+            android:name=".RingActionReceiver"
+            android:exported="false" />
     </application>
 </manifest>
