@@ -3,6 +3,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:allowBackup="false"
@@ -35,5 +37,15 @@
         <receiver
             android:name=".RingActionReceiver"
             android:exported="false" />
+
+        <!-- Short-lived: runs only while a sent ring has not yet been dismissed by the host. -->
+        <service
+            android:name=".RingWatchService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Waits for the host to dismiss a ring so the widget can show its status" />
+        </service>
     </application>
 </manifest>

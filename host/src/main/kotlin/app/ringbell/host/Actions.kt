@@ -19,6 +19,13 @@ object Actions {
         // Local state first: the alarm stops immediately, even when offline.
         History.resolve(ids, RingState.DISMISSED)
         // Then tell the senders so they can no longer "cancel".
+        publishDismissed(ids)
+    }
+
+    /** A ring that arrived too late to sound: tell the sender it is not waiting any more. */
+    fun ackMissed(id: String) = publishDismissed(listOf(id))
+
+    private fun publishDismissed(ids: List<String>) {
         io.execute {
             val ev = RingEvent(type = RingEvent.DISMISSED, name = "host", ids = ids)
             repeat(3) { attempt ->

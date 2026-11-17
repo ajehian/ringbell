@@ -23,7 +23,7 @@ class AlarmPlayer(private val ctx: Context) {
             ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         }
 
-    fun start() {
+    fun start(vibrate: Boolean = true) {
         if (playing) return
         playing = true
 
@@ -57,9 +57,11 @@ class AlarmPlayer(private val ctx: Context) {
             player = null
         }
 
-        try {
-            vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 800, 600), 0))
-        } catch (_: Exception) {
+        if (vibrate) {
+            try {
+                vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 800, 600), 0))
+            } catch (_: Exception) {
+            }
         }
     }
 

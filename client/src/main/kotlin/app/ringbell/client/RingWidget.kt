@@ -13,36 +13,49 @@ import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.view.View
 import android.widget.RemoteViews
 import android.widget.Toast
 
-/** Home-screen widget: one tap rings the host with the saved name, without opening the app. */
+/**
+ * Home-screen widget: one tap rings the host without opening the app.
+ *  - blue, icon only  : nothing active
+ *  - yellow "Ringing" : this device's ring is active; stays until the host dismisses it
+ *  - red "Failed"     : the tap could not reach the host (shown briefly)
+ */
 class RingWidget : AppWidgetProvider() {
 
-    /** Temporary look shown on the widget right after a tap. */
-    enum class Feedback(val label: String, val background: Int) {
-        SENDING("Ringing…", R.drawable.widget_bg),
-        SENT("Sent ✓", R.drawable.widget_bg_ok),
-        ACTIVE("Ringing", R.drawable.widget_bg_warn),
-        FAILED("Failed", R.drawable.widget_bg_err),
+    enum class Feedback(val label: String, val background: Int, val foreground: Int) {
+        RINGING("Ringing", R.drawable.widget_bg_warn, 0xFF212121.toInt()),
+        FAILED("Failed", R.drawable.widget_bg_err, 0xFFFFFFFF.toInt()),
     }
 
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
-        ids.forEach { manager.updateAppWidget(it, buildViews(context, null)) }
+        ids.forEach { manager.updateAppWidget(it, buildViews(context, current(context))) }
     }
 
     companion object {
         fun savedName(ctx: Context): String? =
             ctx.getSharedPreferences("client", Context.MODE_PRIVATE).getString("name", null)
 
-        private fun buildViews(ctx: Context, feedback: Feedback?): RemoteViews {
-            val name = savedName(ctx)
+        private fun current(ctx: Context): Feedback? =
+            if (RingSession.isActive(ctx)) Feedback.RINGING else null
+
+        private fun buildViews(ctx: Context, fb: Feedback?): RemoteViews {
             val views = RemoteViews(ctx.packageName, R.layout.widget_ring)
-            views.setTextViewText(R.id.widget_sub, feedback?.label ?: (name ?: "Set name"))
-            views.setInt(R.id.widget_root, "setBackgroundResource", feedback?.background ?: R.drawable.widget_bg)
+
+            if (fb == null) {
+                views.setViewVisibility(R.id.widget_sub, View.GONE)
+            } else {
+                views.setViewVisibility(R.id.widget_sub, View.VISIBLE)
+                views.setTextViewText(R.id.widget_sub, fb.label)
+                views.setTextColor(R.id.widget_sub, fb.foreground)
+            }
+            views.setInt(R.id.widget_root, "setBackgroundResource", fb?.background ?: R.drawable.widget_bg)
+            views.setInt(R.id.widget_icon, "setColorFilter", fb?.foreground ?: 0xFFFFFFFF.toInt())
 
             val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            val tap = if (name != null) {
+            val tap = if (savedName(ctx) != null) {
                 PendingIntent.getBroadcast(ctx, 0, Intent(ctx, RingActionReceiver::class.java), flags)
             } else {
                 // No name yet: open the app so it can be set up.
@@ -52,11 +65,14 @@ class RingWidget : AppWidgetProvider() {
             return views
         }
 
-        /** Re-render every placed widget; [feedback] null = normal look. */
-        fun refreshAll(ctx: Context, feedback: Feedback? = null) {
-            val mgr = AppWidgetManager.getInstance(ctx)
-            val ids = mgr.getAppWidgetIds(ComponentName(ctx, RingWidget::class.java))
-            ids.forEach { mgr.updateAppWidget(it, buildViews(ctx, feedback)) }
+        /** Re-render every placed widget from the shared ring state, or from [override]. */
+        fun refreshAll(ctx: Context, override: Feedback? = null) {
+            val app = ctx.applicationContext
+            val mgr = AppWidgetManager.getInstance(app)
+            val ids = mgr.getAppWidgetIds(ComponentName(app, RingWidget::class.java))
+            if (ids.isEmpty()) return
+            val fb = override ?: current(app)
+            ids.forEach { mgr.updateAppWidget(it, buildViews(app, fb)) }
         }
     }
 }
@@ -69,35 +85,35 @@ class RingActionReceiver : BroadcastReceiver() {
         val main = Handler(Looper.getMainLooper())
         Thread {
             try {
-                // Instant feedback that the tap registered (works even if toasts are blocked).
-                buzz(app)
-                RingWidget.refreshAll(app, RingWidget.Feedback.SENDING)
+                buzz(app) // instant confirmation that the tap registered
+                RingWidget.refreshAll(app, RingWidget.Feedback.RINGING) // optimistic yellow
 
-                val (fb, msg) = try {
+                val msg = try {
                     when (val r = RingSession.ringIfIdle(app, name)) {
-                        is RingSession.Result.Sent ->
-                            RingWidget.Feedback.SENT to "Ringing the host as $name"
-                        is RingSession.Result.AlreadyRinging ->
-                            RingWidget.Feedback.ACTIVE to "Already ringing. Open the app to cancel."
-                        is RingSession.Result.Failed ->
-                            RingWidget.Feedback.FAILED to "Couldn't ring: ${r.message}"
+                        is RingSession.Result.Sent -> "Ringing the host as $name"
+                        is RingSession.Result.AlreadyRinging -> "Already ringing. Open the app to cancel."
+                        is RingSession.Result.Failed -> {
+                            failed(app)
+                            "Couldn't ring: ${r.message}"
+                        }
                     }
                 } catch (e: Exception) {
-                    RingWidget.Feedback.FAILED to "Couldn't ring: ${e.message ?: "error"}"
+                    failed(app)
+                    "Couldn't ring: ${e.message ?: "error"}"
                 }
-
-                RingWidget.refreshAll(app, fb)
-                main.post { Toast.makeText(app, msg, Toast.LENGTH_SHORT).show() } // extra, may be suppressed by the OS
-                if (fb == RingWidget.Feedback.FAILED) buzz(app)
-
-                Thread.sleep(2500)
-                RingWidget.refreshAll(app, null)
-            } catch (_: Exception) {
-                RingWidget.refreshAll(app, null)
+                main.post { Toast.makeText(app, msg, Toast.LENGTH_SHORT).show() } // extra; the OS may suppress it
             } finally {
                 pending.finish()
             }
         }.start()
+    }
+
+    /** Red flash, then back to whatever the real state is (blue, or yellow if a ring is still active). */
+    private fun failed(app: Context) {
+        buzz(app)
+        RingWidget.refreshAll(app, RingWidget.Feedback.FAILED)
+        Thread.sleep(2500)
+        RingWidget.refreshAll(app)
     }
 
     private fun buzz(ctx: Context) {

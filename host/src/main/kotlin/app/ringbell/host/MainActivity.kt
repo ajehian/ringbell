@@ -60,6 +60,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import android.media.AudioManager
+import androidx.compose.material3.Slider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -105,6 +112,7 @@ private fun HostScreen() {
         }
 
         item { SetupCard(refresh) }
+        item { VolumeCard(refresh, active.isNotEmpty()) }
 
         if (active.isNotEmpty()) {
             item {
@@ -217,6 +225,69 @@ private fun SetupCard(refreshKey: Int) {
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Don't restrict battery usage") }
+            }
+        }
+    }
+}
+
+/** Rings use the ALARM volume stream: show it, let the user set it, and let them hear the sound. */
+@Composable
+private fun VolumeCard(refreshKey: Int, anyRinging: Boolean) {
+    val ctx = LocalContext.current
+    val am = remember { ctx.getSystemService(AudioManager::class.java) }
+    val max = remember { am.getStreamMaxVolume(AudioManager.STREAM_ALARM).coerceAtLeast(1) }
+    var volume by remember(refreshKey) { mutableIntStateOf(am.getStreamVolume(AudioManager.STREAM_ALARM)) }
+    var testing by remember { mutableStateOf(false) }
+    val player = remember { AlarmPlayer(ctx.applicationContext) }
+
+    DisposableEffect(Unit) { onDispose { player.stop() } }
+    LaunchedEffect(testing) {
+        if (testing) {
+            player.start(vibrate = false)
+            volume = am.getStreamVolume(AudioManager.STREAM_ALARM)
+            delay(8_000)
+            testing = false
+        } else {
+            player.stop()
+        }
+    }
+    LaunchedEffect(anyRinging) { if (anyRinging) testing = false }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Alarm volume", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Rings play on the Alarm volume, which is separate from the ringer and media volume. " +
+                    "Turn it up so a ring can't go unheard.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Slider(
+                value = volume.toFloat(),
+                onValueChange = {
+                    volume = it.roundToInt()
+                    try {
+                        am.setStreamVolume(AudioManager.STREAM_ALARM, volume, 0)
+                    } catch (_: SecurityException) {
+                    }
+                },
+                valueRange = 0f..max.toFloat(),
+                steps = max - 1,
+            )
+            if (volume == 0) {
+                Text(
+                    "Alarm volume is at zero. Ring Host raises it to about 70% when a ring arrives, " +
+                        "but set it here so you know it's right.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(onClick = { testing = !testing }, enabled = !anyRinging) {
+                    Text(if (testing) "Stop test" else "Test ring sound")
+                }
+                TextButton(onClick = { ctx.startActivity(Intent(Settings.ACTION_SOUND_SETTINGS)) }) {
+                    Text("Sound settings")
+                }
             }
         }
     }

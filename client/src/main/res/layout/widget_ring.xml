@@ -10,6 +10,7 @@
 
     <ImageView
         android:layout_width="30dp"
+        android:id="@+id/widget_icon"
         android:layout_height="30dp"
         android:contentDescription="Ring the host"
         android:src="@drawable/ic_bell" />

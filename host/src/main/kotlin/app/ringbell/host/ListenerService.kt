@@ -123,12 +123,14 @@ class ListenerService : Service() {
             RingEvent.RING -> {
                 // Replays after being offline must not wake the house with a stale ring.
                 val stale = System.currentTimeMillis() - inc.timeMs > STALE_MS
-                History.addRing(
+                val added = History.addRing(
                     id = ev.id,
                     name = ev.name.ifBlank { "Unknown" },
                     at = inc.timeMs,
                     state = if (stale) RingState.MISSED else RingState.RINGING,
                 )
+                // Without this the sender's widget would show "ringing" for a ring nobody will ever dismiss.
+                if (added && stale) Actions.ackMissed(ev.id)
             }
             RingEvent.CANCEL -> History.resolve(listOf(ev.id), RingState.CANCELLED)
             // DISMISSED events are our own echoes; nothing to do.
