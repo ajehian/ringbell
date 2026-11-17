@@ -59,11 +59,13 @@ class RingActionReceiver : BroadcastReceiver() {
         val main = Handler(Looper.getMainLooper())
         Thread {
             val msg = try {
-                Ntfy(RingConfig(BuildConfig.RING_SERVER, BuildConfig.RING_TOPIC, BuildConfig.RING_TOKEN))
-                    .publish(RingEvent(type = RingEvent.RING, id = RingEvent.newId(), name = name))
-                "Rang the host as $name"
+                when (val r = RingSession.ringIfIdle(app, name)) {
+                    is RingSession.Result.Sent -> "Ringing the host as $name"
+                    is RingSession.Result.AlreadyRinging -> "Already ringing. Open the app to cancel."
+                    is RingSession.Result.Failed -> "Couldn't ring: ${r.message}"
+                }
             } catch (e: Exception) {
-                "Couldn't ring: ${e.message ?: "network error"}"
+                "Couldn't ring: ${e.message ?: "error"}"
             }
             main.post { Toast.makeText(app, msg, Toast.LENGTH_SHORT).show() }
             pending.finish()

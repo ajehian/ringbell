@@ -48,6 +48,10 @@ class Ntfy(private val cfg: RingConfig) {
         .readTimeout(90, TimeUnit.SECONDS)
         .build()
 
+    private val pollClient = OkHttpClient.Builder()
+        .callTimeout(8, TimeUnit.SECONDS)
+        .build()
+
     private fun request(url: String): Request.Builder {
         val b = Request.Builder().url(url)
         if (cfg.token.isNotBlank()) b.header("Authorization", "Bearer ${cfg.token}")
@@ -97,5 +101,28 @@ class Ntfy(private val cfg: RingConfig) {
                 onMessage(Incoming(o.optString("id"), o.optLong("time") * 1000, ev))
             }
         }
+    }
+
+    /** One-shot fetch of recent cached messages (no streaming). [since] e.g. "15m". */
+    @Throws(IOException::class)
+    fun poll(since: String): List<Incoming> {
+        val req = request("${cfg.url}/json?poll=1&since=$since").build()
+        pollClient.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw HttpStatusException(resp.code)
+            val body = resp.body?.string() ?: return emptyList()
+            return body.lineSequence().mapNotNull { parseLine(it) }.toList()
+        }
+    }
+
+    private fun parseLine(line: String): Incoming? {
+        if (line.isBlank()) return null
+        val o = try {
+            JSONObject(line)
+        } catch (e: Exception) {
+            return null
+        }
+        if (o.optString("event") != "message") return null
+        val ev = RingEvent.decode(o.optString("message")) ?: return null
+        return Incoming(o.optString("id"), o.optLong("time") * 1000, ev)
     }
 }

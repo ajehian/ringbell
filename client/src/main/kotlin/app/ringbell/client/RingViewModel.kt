@@ -51,7 +51,9 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Called each time the app comes to the foreground. With no name yet it only shows
-     * the setup screen; once a name is saved, every open rings the host.
+     * the setup screen; once a name is saved, every open rings the host, unless a ring
+     * from this device (for example from the widget) is already active, in which case
+     * the screen simply adopts it.
      */
     fun onFreshLaunch() {
         if (_name.value != null) ring()
@@ -60,42 +62,28 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
     fun ring() {
         val n = _name.value ?: return
         stopListening()
-
-        // A ring from an earlier open may still be active on the host. Withdraw it first
-        // (same single-thread executor, so it is sent before the new ring) so the client
-        // only ever has one live ring and "Cancel ring" really stops everything.
-        val prev = ringId
-        val prevStatus = _status.value
-        if (prev != null && (prevStatus is Status.Sending || prevStatus is Status.Ringing)) {
-            io.execute {
-                try {
-                    ntfy.publish(RingEvent(type = RingEvent.CANCEL, id = prev))
-                } catch (_: Exception) {
-                }
-            }
-        }
-
-        val ev = RingEvent(type = RingEvent.RING, id = RingEvent.newId(), name = n)
-        ringId = ev.id
         _status.value = Status.Sending
         io.execute {
-            try {
-                ntfy.publish(ev)
-                if (ringId == ev.id && _status.value is Status.Sending) {
+            val r = RingSession.ringIfIdle(getApplication<Application>(), n)
+            val id = when (r) {
+                is RingSession.Result.Sent -> r.id
+                is RingSession.Result.AlreadyRinging -> r.id
+                is RingSession.Result.Failed -> null
+            }
+            if (id != null) {
+                ringId = id // set even if the user already pressed Cancel, so that cancel targets it
+                if (_status.value is Status.Sending) {
                     _status.value = Status.Ringing
-                    listenForDismiss(ev)
+                    listenForDismiss(id)
                 }
-            } catch (e: Exception) {
-                if (ringId == ev.id && _status.value is Status.Sending) {
-                    _status.value = Status.Failed(e.message ?: "Network error")
-                }
+            } else if (_status.value is Status.Sending) {
+                _status.value = Status.Failed((r as RingSession.Result.Failed).message)
             }
         }
     }
 
     /** Withdraw the ring. Only possible while the host has not dismissed it. */
     fun cancel() {
-        val id = ringId ?: return
         val s = _status.value
         val retry = s is Status.Failed && s.whileCancelling
         if (s !is Status.Sending && s !is Status.Ringing && !retry) return
@@ -103,8 +91,11 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
         stopListening()
         _status.value = Status.Cancelled
         io.execute {
+            // Runs after any in-flight ring() on this same thread, so ringId is up to date.
+            val id = ringId ?: return@execute
             try {
                 ntfy.publish(RingEvent(type = RingEvent.CANCEL, id = id))
+                RingSession.clear(getApplication<Application>(), id)
             } catch (e: Exception) {
                 if (ringId == id) _status.value = Status.Failed(e.message ?: "Network error", whileCancelling = true)
             }
@@ -117,7 +108,7 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Follows the topic until the host reports this ring as dismissed. */
-    private fun listenForDismiss(ev: RingEvent) {
+    private fun listenForDismiss(id: String) {
         val s = Subscription()
         sub = s
         Thread {
@@ -126,11 +117,12 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
                 try {
                     // "10m" replay window is independent of clock differences between phone and server.
                     ntfy.stream("10m", s, onOpen = { delayMs = 1000L }) { inc ->
-                        if (inc.event.type == RingEvent.DISMISSED && ev.id in inc.event.ids) {
+                        if (inc.event.type == RingEvent.DISMISSED && id in inc.event.ids) {
                             val cur = _status.value
-                            if (ringId == ev.id && (cur is Status.Ringing || cur is Status.Sending)) {
+                            if (ringId == id && (cur is Status.Ringing || cur is Status.Sending)) {
                                 _status.value = Status.Dismissed
                             }
+                            RingSession.clear(getApplication<Application>(), id)
                             s.cancel()
                         }
                     }
