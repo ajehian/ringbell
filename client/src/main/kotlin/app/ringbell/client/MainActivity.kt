@@ -45,9 +45,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Only a genuinely new launch rings; rotation / process-restore re-creation does not.
-        if (savedInstanceState == null) vm.onFreshLaunch()
-
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
                 Surface(Modifier.fillMaxSize()) {
@@ -77,6 +74,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    // Ring every time the app comes to the foreground (fresh launch or resumed from recents),
+    // but not when the activity is merely re-created for a rotation / theme change.
+    override fun onStart() {
+        super.onStart()
+        if (vm.skipNextStart) vm.skipNextStart = false else vm.onFreshLaunch()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        vm.skipNextStart = isChangingConfigurations
     }
 }
 

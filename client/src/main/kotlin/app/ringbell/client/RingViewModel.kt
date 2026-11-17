@@ -35,6 +35,9 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
     private val _status = MutableStateFlow<Status>(Status.Idle)
     val status: StateFlow<Status> = _status
 
+    /** Set by the activity when it stops for a configuration change, so the re-start does not ring. */
+    @Volatile var skipNextStart = false
+
     @Volatile private var ringId: String? = null
     @Volatile private var sub: Subscription? = null
 
@@ -47,8 +50,8 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Called once per real app launch. The very first launch (no name yet) only
-     * shows the setup screen; every later launch rings the host.
+     * Called each time the app comes to the foreground. With no name yet it only shows
+     * the setup screen; once a name is saved, every open rings the host.
      */
     fun onFreshLaunch() {
         if (_name.value != null) ring()
@@ -57,6 +60,21 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
     fun ring() {
         val n = _name.value ?: return
         stopListening()
+
+        // A ring from an earlier open may still be active on the host. Withdraw it first
+        // (same single-thread executor, so it is sent before the new ring) so the client
+        // only ever has one live ring and "Cancel ring" really stops everything.
+        val prev = ringId
+        val prevStatus = _status.value
+        if (prev != null && (prevStatus is Status.Sending || prevStatus is Status.Ringing)) {
+            io.execute {
+                try {
+                    ntfy.publish(RingEvent(type = RingEvent.CANCEL, id = prev))
+                } catch (_: Exception) {
+                }
+            }
+        }
+
         val ev = RingEvent(type = RingEvent.RING, id = RingEvent.newId(), name = n)
         ringId = ev.id
         _status.value = Status.Sending
