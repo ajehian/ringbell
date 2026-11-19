@@ -38,6 +38,10 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
     /** Set by the activity when it stops for a configuration change, so the re-start does not ring. */
     @Volatile var skipNextStart = false
 
+    /** True while the active ring is queued because no host is online right now. */
+    private val _hostsOffline = MutableStateFlow(false)
+    val hostsOffline: StateFlow<Boolean> = _hostsOffline
+
     @Volatile private var ringId: String? = null
     @Volatile private var sub: Subscription? = null
 
@@ -62,6 +66,7 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
     fun ring() {
         val n = _name.value ?: return
         stopListening()
+        _hostsOffline.value = false
         _status.value = Status.Sending
         io.execute {
             val r = RingSession.ringIfIdle(getApplication<Application>(), n)
@@ -69,6 +74,11 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
                 is RingSession.Result.Sent -> r.id
                 is RingSession.Result.AlreadyRinging -> r.id
                 is RingSession.Result.Failed -> null
+            }
+            when (r) {
+                is RingSession.Result.Sent -> _hostsOffline.value = !r.hostsOnline
+                is RingSession.Result.AlreadyRinging -> _hostsOffline.value = !r.hostsOnline
+                is RingSession.Result.Failed -> {}
             }
             if (id != null) {
                 ringId = id // set even if the user already pressed Cancel, so that cancel targets it
@@ -89,6 +99,7 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
         if (s !is Status.Sending && s !is Status.Ringing && !retry) return
 
         stopListening()
+        _hostsOffline.value = false
         _status.value = Status.Cancelled
         io.execute {
             // Runs after any in-flight ring() on this same thread, so ringId is up to date.
@@ -115,8 +126,14 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
             var delayMs = 1000L
             while (!s.cancelled) {
                 try {
-                    // "10m" replay window is independent of clock differences between phone and server.
-                    ntfy.stream("10m", s, onOpen = { delayMs = 1000L }) { inc ->
+                    // The ring may be days old, so replay everything the server still has.
+                    ntfy.stream("all", s, onOpen = { delayMs = 1000L }) { inc ->
+                        if (inc.event.type == RingEvent.HEARTBEAT &&
+                            System.currentTimeMillis() - inc.timeMs < RingSession.HOST_FRESH_MS
+                        ) {
+                            _hostsOffline.value = false
+                            RingSession.hostSeen(getApplication<Application>())
+                        }
                         if (inc.event.type == RingEvent.DISMISSED && id in inc.event.ids) {
                             val cur = _status.value
                             if (ringId == id && (cur is Status.Ringing || cur is Status.Sending)) {

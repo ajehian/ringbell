@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
                 Surface(Modifier.fillMaxSize()) {
                     val name by vm.name.collectAsStateWithLifecycle()
                     val status by vm.status.collectAsStateWithLifecycle()
+                    val hostsOffline by vm.hostsOffline.collectAsStateWithLifecycle()
                     var editing by rememberSaveable { mutableStateOf(false) }
 
                     Box(Modifier.safeDrawingPadding().padding(24.dp)) {
@@ -65,6 +66,7 @@ class MainActivity : ComponentActivity() {
                             RingScreen(
                                 name = n,
                                 status = status,
+                                hostsOffline = hostsOffline,
                                 onCancel = vm::cancel,
                                 onRing = vm::ring,
                                 onEditName = { editing = true },
@@ -131,6 +133,7 @@ private fun NameScreen(initial: String, isEdit: Boolean, onSave: (String) -> Uni
 private fun RingScreen(
     name: String,
     status: Status,
+    hostsOffline: Boolean,
     onCancel: () -> Unit,
     onRing: () -> Unit,
     onEditName: () -> Unit,
@@ -156,6 +159,15 @@ private fun RingScreen(
             Text(headline, style = MaterialTheme.typography.displaySmall)
             Spacer(Modifier.height(8.dp))
             Text(detail, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
+            if (hostsOffline && status is Status.Ringing) {
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "All hosts are offline right now. Your ring is queued and will sound as soon as any host is back online.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center,
+                )
+            }
             Spacer(Modifier.height(32.dp))
 
             when {

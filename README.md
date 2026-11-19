@@ -40,7 +40,10 @@ After that it restarts itself on reboot. Samsung / Xiaomi / etc. may also need "
 
 ## Behaviour notes
 
-- Rings that reach the host more than 2 minutes late (it was offline) are recorded as **Missed** instead of sounding.
+- A ring never expires. If every host is offline, the client says so ("All hosts are offline… queued", and the widget shows **Offline**) but still sends it; the next host to come online catches up and rings, whether that is 15 minutes or 15 days later. The client keeps the ring pending until a host dismisses it or you cancel.
+- Online detection: each connected host posts a small `hb` (heartbeat) message every ~4 minutes. No heartbeat in the last 10 minutes means "all hosts offline".
+- ntfy only caches messages for a limited time (12 h on ntfy.sh, `cache-duration` on a self-hosted server). To outlive that, the client re-publishes its pending ring (same id, so hosts ignore the duplicate) hourly whenever it sees a host heartbeat. This needs the client's background watcher alive; on a self-hosted server you can also raise `cache-duration`.
+- Dismissing a ring on one host also stops it on the other hosts (including ones that were offline and catch up later).
 - Dismiss and cancel are idempotent; duplicate deliveries are ignored by ring id.
 - The alarm uses the system default alarm sound on the alarm volume stream; if that stream is muted it is raised to ~70 %.
 - The client only rings on a real launch (not on rotation), and the very first launch (name setup) does not ring.

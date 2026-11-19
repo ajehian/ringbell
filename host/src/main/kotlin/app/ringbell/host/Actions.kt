@@ -22,8 +22,26 @@ object Actions {
         publishDismissed(ids)
     }
 
-    /** A ring that arrived too late to sound: tell the sender it is not waiting any more. */
-    fun ackMissed(id: String) = publishDismissed(listOf(id))
+    @Volatile private var lastBeat = 0L
+
+    /**
+     * Tells clients "a host is online". Called on connect and on every server keepalive,
+     * but only publishes once per [HEARTBEAT_EVERY_MS] (or at once when [force]d).
+     */
+    fun heartbeat(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastBeat < HEARTBEAT_EVERY_MS) return
+        lastBeat = now
+        io.execute {
+            try {
+                Ntfy(Config.ring).publish(RingEvent(type = RingEvent.HEARTBEAT, name = "host"))
+            } catch (_: Exception) {
+                lastBeat = 0L // retry on the next keepalive
+            }
+        }
+    }
+
+    private const val HEARTBEAT_EVERY_MS = 4 * 60_000L
 
     private fun publishDismissed(ids: List<String>) {
         io.execute {

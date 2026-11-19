@@ -15,6 +15,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -60,11 +62,15 @@ class ListenerService : Service() {
     }
 
     /** Alarm + notification follow the history: ringing iff any entry is RINGING. */
+    @OptIn(FlowPreview::class)
     private fun observeRings() {
         scope.launch {
             History.entries
                 .map { list -> list.filter { it.state == RingState.RINGING } }
                 .distinctUntilChanged()
+                // When catching up after being offline, a ring and its later dismissal arrive back to
+                // back: wait a moment before sounding so an already-dismissed ring never blinks on.
+                .debounce { if (it.isEmpty()) 0L else 400L }
                 .collect { active ->
                     if (active.isEmpty()) {
                         alarm.stop()
@@ -87,13 +93,17 @@ class ListenerService : Service() {
             sub = s
             try {
                 Conn.set(false, "Connecting…")
+                // Catch up on everything missed while offline, however long ago (as far as the server
+                // still has it). With no remembered position at all, replay the whole cache.
                 ntfy.stream(
-                    since = prefs.getString("last_id", null),
+                    since = prefs.getString("last_id", null) ?: "all",
                     sub = s,
                     onOpen = {
                         backoff = 2_000L
                         Conn.set(true, "Listening")
+                        Actions.heartbeat(force = true)
                     },
+                    onKeepalive = { Actions.heartbeat() },
                 ) { inc ->
                     handle(inc)
                     if (inc.ntfyId.isNotEmpty()) prefs.edit().putString("last_id", inc.ntfyId).apply()
@@ -102,7 +112,7 @@ class ListenerService : Service() {
             } catch (e: Exception) {
                 if (!running) break
                 if (e is HttpStatusException && e.code == 400) {
-                    // The remembered message id is no longer valid on the server.
+                    // The remembered message id is no longer valid on the server: replay everything it has.
                     prefs.edit().remove("last_id").apply()
                 }
                 Conn.set(false, "Offline: ${e.message ?: e.javaClass.simpleName}")
@@ -120,20 +130,16 @@ class ListenerService : Service() {
     private fun handle(inc: Incoming) {
         val ev = inc.event
         when (ev.type) {
-            RingEvent.RING -> {
-                // Replays after being offline must not wake the house with a stale ring.
-                val stale = System.currentTimeMillis() - inc.timeMs > STALE_MS
-                val added = History.addRing(
-                    id = ev.id,
-                    name = ev.name.ifBlank { "Unknown" },
-                    at = inc.timeMs,
-                    state = if (stale) RingState.MISSED else RingState.RINGING,
-                )
-                // Without this the sender's widget would show "ringing" for a ring nobody will ever dismiss.
-                if (added && stale) Actions.ackMissed(ev.id)
-            }
+            // A ring always sounds, however late it arrives: the client keeps it pending until a host dismisses it.
+            RingEvent.RING -> History.addRing(
+                id = ev.id,
+                name = ev.name.ifBlank { "Unknown" },
+                at = inc.timeMs,
+                state = RingState.RINGING,
+            )
             RingEvent.CANCEL -> History.resolve(listOf(ev.id), RingState.CANCELLED)
-            // DISMISSED events are our own echoes; nothing to do.
+            // Dismissed on another host (or by us, a no-op): also covers catching up after being offline.
+            RingEvent.DISMISSED -> History.resolve(ev.ids, RingState.DISMISSED)
         }
     }
 
@@ -149,8 +155,6 @@ class ListenerService : Service() {
     }
 
     companion object {
-        private const val STALE_MS = 2 * 60_000L
-
         fun start(ctx: Context) {
             androidx.core.content.ContextCompat.startForegroundService(ctx, Intent(ctx, ListenerService::class.java))
         }

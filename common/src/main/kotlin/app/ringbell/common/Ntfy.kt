@@ -79,6 +79,7 @@ class Ntfy(private val cfg: RingConfig) {
         since: String?,
         sub: Subscription,
         onOpen: () -> Unit,
+        onKeepalive: () -> Unit = {},
         onMessage: (Incoming) -> Unit,
     ) {
         val url = cfg.url + "/json" + (if (since != null) "?since=$since" else "")
@@ -96,7 +97,9 @@ class Ntfy(private val cfg: RingConfig) {
                 } catch (e: Exception) {
                     continue
                 }
-                if (o.optString("event") != "message") continue
+                val kind = o.optString("event")
+                if (kind == "keepalive") onKeepalive()
+                if (kind != "message") continue
                 val ev = RingEvent.decode(o.optString("message")) ?: continue
                 onMessage(Incoming(o.optString("id"), o.optLong("time") * 1000, ev))
             }

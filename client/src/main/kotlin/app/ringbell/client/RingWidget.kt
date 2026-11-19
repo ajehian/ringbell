@@ -21,12 +21,14 @@ import android.widget.Toast
  * Home-screen widget: one tap rings the host without opening the app.
  *  - blue, icon only  : nothing active
  *  - yellow "Ringing" : this device's ring is active; stays until the host dismisses it
+ *  - yellow "Offline" : same, but every host is offline; the ring is queued until one comes back
  *  - red "Failed"     : the tap could not reach the host (shown briefly)
  */
 class RingWidget : AppWidgetProvider() {
 
     enum class Feedback(val label: String, val background: Int, val foreground: Int) {
         RINGING("Ringing", R.drawable.widget_bg_warn, 0xFF212121.toInt()),
+        QUEUED("Offline", R.drawable.widget_bg_warn, 0xFF212121.toInt()),
         FAILED("Failed", R.drawable.widget_bg_err, 0xFFFFFFFF.toInt()),
     }
 
@@ -39,7 +41,11 @@ class RingWidget : AppWidgetProvider() {
             ctx.getSharedPreferences("client", Context.MODE_PRIVATE).getString("name", null)
 
         private fun current(ctx: Context): Feedback? =
-            if (RingSession.isActive(ctx)) Feedback.RINGING else null
+            when {
+                RingSession.isQueuedOffline(ctx) -> Feedback.QUEUED
+                RingSession.isActive(ctx) -> Feedback.RINGING
+                else -> null
+            }
 
         private fun buildViews(ctx: Context, fb: Feedback?): RemoteViews {
             val views = RemoteViews(ctx.packageName, R.layout.widget_ring)
@@ -90,8 +96,10 @@ class RingActionReceiver : BroadcastReceiver() {
 
                 val msg = try {
                     when (val r = RingSession.ringIfIdle(app, name)) {
-                        is RingSession.Result.Sent -> "Ringing the host as $name"
-                        is RingSession.Result.AlreadyRinging -> "Already ringing. Open the app to cancel."
+                        is RingSession.Result.Sent ->
+                            if (r.hostsOnline) "Ringing the host as $name" else "All hosts offline. Ring queued."
+                        is RingSession.Result.AlreadyRinging ->
+                            if (r.hostsOnline) "Already ringing. Open the app to cancel." else "All hosts offline. Ring still queued."
                         is RingSession.Result.Failed -> {
                             failed(app)
                             "Couldn't ring: ${r.message}"

@@ -9,9 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import app.ringbell.common.Ntfy
@@ -21,22 +19,16 @@ import app.ringbell.common.Subscription
 import kotlin.math.min
 
 /**
- * Runs only while a ring this device sent is still active. It listens for the host's
- * "dismissed" message so the widget can go back to normal the moment the host dismisses,
- * even if the app is closed. Stops itself as soon as the ring is finished.
+ * Runs only while a ring this device sent is still active (as long as it takes: hosts may be
+ * offline for days). It listens for the host's "dismissed" message so the widget can go back to
+ * normal the moment the host dismisses, even if the app is closed. Stops itself as soon as the
+ * ring is finished.
  */
 class RingWatchService : Service() {
 
     @Volatile private var running = false
     @Volatile private var sub: Subscription? = null
     private var thread: Thread? = null
-    private val main = Handler(Looper.getMainLooper())
-
-    // Safety net: if the ring is never dismissed, stop waiting when it expires.
-    private val expire = Runnable {
-        RingWidget.refreshAll(this)
-        stopSelf()
-    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -70,10 +62,6 @@ class RingWatchService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        val remaining = RingSession.EXPIRY_MS - (System.currentTimeMillis() - RingSession.activeAt(this))
-        main.removeCallbacks(expire)
-        main.postDelayed(expire, remaining.coerceAtLeast(0L))
-
         if (!running) {
             running = true
             thread = Thread({ watch() }, "ring-watch").apply { isDaemon = true; start() }
@@ -94,6 +82,13 @@ class RingWatchService : Service() {
                     if ((e.type == RingEvent.DISMISSED && id in e.ids) || (e.type == RingEvent.CANCEL && e.id == id)) {
                         RingSession.clear(this, id) // also stops this service and refreshes the widget
                         s.cancel()
+                    } else if (e.type == RingEvent.HEARTBEAT &&
+                        System.currentTimeMillis() - inc.timeMs < RingSession.HOST_FRESH_MS
+                    ) {
+                        // A host is online right now: no longer "all hosts offline", and refresh the
+                        // server's copy of our ring if it is old (hosts ignore the duplicate by id).
+                        RingSession.hostSeen(this)
+                        RingSession.resendIfDue(this, id)
                     }
                 }
             } catch (_: Exception) {
@@ -114,7 +109,6 @@ class RingWatchService : Service() {
         running = false
         sub?.cancel()
         thread?.interrupt()
-        main.removeCallbacks(expire)
         super.onDestroy()
     }
 
