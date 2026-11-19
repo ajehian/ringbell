@@ -22,26 +22,36 @@ object Actions {
         publishDismissed(ids)
     }
 
-    @Volatile private var lastBeat = 0L
-
-    /**
-     * Tells clients "a host is online". Called on connect and on every server keepalive,
-     * but only publishes once per [HEARTBEAT_EVERY_MS] (or at once when [force]d).
-     */
-    fun heartbeat(force: Boolean = false) {
-        val now = System.currentTimeMillis()
-        if (!force && now - lastBeat < HEARTBEAT_EVERY_MS) return
-        lastBeat = now
+    /** Answers a client's "is any host online?" ping. */
+    fun pong(pingId: String) {
         io.execute {
             try {
-                Ntfy(Config.ring).publish(RingEvent(type = RingEvent.HEARTBEAT, name = "host"))
+                Ntfy(Config.ring).publish(RingEvent(type = RingEvent.PONG, id = pingId, name = "host"))
             } catch (_: Exception) {
-                lastBeat = 0L // retry on the next keepalive
             }
         }
     }
 
-    private const val HEARTBEAT_EVERY_MS = 4 * 60_000L
+    @Volatile private var lastHello = 0L
+
+    /**
+     * Announces that this host just came online, so a client with a ring still pending can
+     * make sure it is on the server. Rate-limited so a flaky connection can't flood the topic.
+     */
+    fun hello() {
+        val now = System.currentTimeMillis()
+        if (now - lastHello < HELLO_MIN_GAP_MS) return
+        lastHello = now
+        io.execute {
+            try {
+                Ntfy(Config.ring).publish(RingEvent(type = RingEvent.HELLO, name = "host"))
+            } catch (_: Exception) {
+                lastHello = 0L // retry on the next connect
+            }
+        }
+    }
+
+    private const val HELLO_MIN_GAP_MS = 10 * 60_000L
 
     private fun publishDismissed(ids: List<String>) {
         io.execute {

@@ -82,13 +82,14 @@ class RingWatchService : Service() {
                     if ((e.type == RingEvent.DISMISSED && id in e.ids) || (e.type == RingEvent.CANCEL && e.id == id)) {
                         RingSession.clear(this, id) // also stops this service and refreshes the widget
                         s.cancel()
-                    } else if (e.type == RingEvent.HEARTBEAT &&
+                    } else if ((e.type == RingEvent.HELLO || e.type == RingEvent.PONG) &&
                         System.currentTimeMillis() - inc.timeMs < RingSession.HOST_FRESH_MS
                     ) {
-                        // A host is online right now: no longer "all hosts offline", and refresh the
-                        // server's copy of our ring if it is old (hosts ignore the duplicate by id).
+                        // A host is online right now: no longer "all hosts offline".
                         RingSession.hostSeen(this)
-                        RingSession.resendIfDue(this, id)
+                        // A host that just came online may have missed our ring if the server's cache
+                        // expired it: re-publish it if it is old (hosts ignore the duplicate by id).
+                        if (e.type == RingEvent.HELLO) RingSession.resendIfDue(this, id)
                     }
                 }
             } catch (_: Exception) {

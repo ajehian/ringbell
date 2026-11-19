@@ -10,7 +10,9 @@ import java.util.UUID
  *  - RING       client -> host   "name" is ringing; [id] identifies this ring
  *  - CANCEL     client -> host   the ring with [id] is withdrawn
  *  - DISMISSED  host -> client   the rings listed in [ids] were dismissed
- *  - HEARTBEAT  host -> client   "a host is online"; sent every few minutes while a host is connected
+ *  - PING       client -> host   "is any host online?"; [id] identifies this ping
+ *  - PONG       host -> client   a host is online; [id] echoes the ping it answers
+ *  - HELLO      host -> client   a host just came online (lets the client re-send a still-pending ring)
  */
 data class RingEvent(
     val type: String,
@@ -31,7 +33,11 @@ data class RingEvent(
         const val RING = "ring"
         const val CANCEL = "cancel"
         const val DISMISSED = "dismissed"
-        const val HEARTBEAT = "hb"
+        const val PING = "ping"
+        const val PONG = "pong"
+        const val HELLO = "hello"
+
+        private val TYPES = setOf(RING, CANCEL, DISMISSED, PING, PONG, HELLO)
 
         fun newId(): String = UUID.randomUUID().toString()
 
@@ -39,7 +45,7 @@ data class RingEvent(
         fun decode(s: String): RingEvent? = try {
             val o = JSONObject(s)
             val type = o.optString("t")
-            if (type != RING && type != CANCEL && type != DISMISSED && type != HEARTBEAT) {
+            if (type !in TYPES) {
                 null
             } else {
                 val arr = o.optJSONArray("ids")

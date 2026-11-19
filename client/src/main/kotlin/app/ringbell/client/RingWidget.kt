@@ -96,10 +96,14 @@ class RingActionReceiver : BroadcastReceiver() {
 
                 val msg = try {
                     when (val r = RingSession.ringIfIdle(app, name)) {
-                        is RingSession.Result.Sent ->
-                            if (r.hostsOnline) "Ringing the host as $name" else "All hosts offline. Ring queued."
-                        is RingSession.Result.AlreadyRinging ->
-                            if (r.hostsOnline) "Already ringing. Open the app to cancel." else "All hosts offline. Ring still queued."
+                        is RingSession.Result.Sent -> {
+                            checkHostsInBackground(app, main)
+                            "Ringing the host as $name"
+                        }
+                        is RingSession.Result.AlreadyRinging -> {
+                            checkHostsInBackground(app, main)
+                            "Already ringing. Open the app to cancel."
+                        }
                         is RingSession.Result.Failed -> {
                             failed(app)
                             "Couldn't ring: ${r.message}"
@@ -114,6 +118,19 @@ class RingActionReceiver : BroadcastReceiver() {
                 pending.finish()
             }
         }.start()
+    }
+
+    /**
+     * Pings the hosts without holding up the broadcast. If nobody answers, the widget turns
+     * "Offline" (RingSession updates it) and a second toast says why. The ring-watch service
+     * keeps the process alive meanwhile.
+     */
+    private fun checkHostsInBackground(app: Context, main: Handler) {
+        Thread {
+            if (!RingSession.checkHostsOnline(app)) {
+                main.post { Toast.makeText(app, "All hosts offline. Ring queued.", Toast.LENGTH_LONG).show() }
+            }
+        }.apply { isDaemon = true }.start()
     }
 
     /** Red flash, then back to whatever the real state is (blue, or yellow if a ring is still active). */

@@ -4,6 +4,7 @@ import android.content.Context
 import app.ringbell.common.Ntfy
 import app.ringbell.common.RingConfig
 import app.ringbell.common.RingEvent
+import app.ringbell.common.Subscription
 
 /**
  * Process-wide record of "the ring this device currently has active", shared by the
@@ -19,16 +20,19 @@ object RingSession {
     private const val KEY_PUB = "active_published_at"
     private const val KEY_OFFLINE = "active_hosts_offline"
 
-    /** A heartbeat younger than this means a host is online (hosts beat every ~4 min). */
-    const val HOST_FRESH_MS = 10 * 60_000L
+    /** How long to wait for a host to answer a ping before concluding that all hosts are offline. */
+    private const val PONG_WAIT_MS = 6_000L
+
+    /** A host message older than this is a replay, not proof that a host is online now. */
+    const val HOST_FRESH_MS = 2 * 60_000L
 
     // The ntfy server only caches messages for a limited time (12 h on ntfy.sh). While a ring is
-    // still pending we re-publish it now and then, whenever a host is seen, so it never expires.
+    // still pending we re-publish it now and then, when a host announces it came online, so it never expires.
     private const val RESEND_AFTER_MS = 60 * 60_000L
 
     sealed interface Result {
-        data class Sent(val id: String, val hostsOnline: Boolean) : Result
-        data class AlreadyRinging(val id: String, val hostsOnline: Boolean) : Result
+        data class Sent(val id: String) : Result
+        data class AlreadyRinging(val id: String) : Result
         data class Failed(val message: String) : Result
     }
 
@@ -52,7 +56,7 @@ object RingSession {
 
     /**
      * Rings the host unless this device already has an undismissed ring.
-     * Blocking (network). Synchronized so rapid taps are processed one at a time.
+     * Blocking (network). Does not check whether a host is online: see [checkHostsOnline]. Synchronized so rapid taps are processed one at a time.
      */
     @Synchronized
     fun ringIfIdle(ctx: Context, name: String): Result {
@@ -61,15 +65,14 @@ object RingSession {
         val oldId = p.getString(KEY_ID, null)
         if (oldId != null) {
             val finished = try {
-                isFinished(oldId)
+                isFinished(oldId, p.getLong(KEY_AT, 0L))
             } catch (e: Exception) {
                 return Result.Failed(e.message ?: "Network error")
             }
             if (!finished) {
                 RingWatchService.start(app) // make sure something is watching for the dismissal
-                val online = checkHostsOnline(app)
                 RingWidget.refreshAll(app)
-                return Result.AlreadyRinging(oldId, online)
+                return Result.AlreadyRinging(oldId)
             }
             forget(app)
         }
@@ -80,10 +83,9 @@ object RingSession {
             val now = System.currentTimeMillis()
             p.edit().putString(KEY_ID, ev.id).putLong(KEY_AT, now).putLong(KEY_PUB, now)
                 .putBoolean(KEY_OFFLINE, false).apply()
-            val online = checkHostsOnline(app)
             RingWatchService.start(app)
             RingWidget.refreshAll(app)
-            Result.Sent(ev.id, online)
+            Result.Sent(ev.id)
         } catch (e: Exception) {
             Result.Failed(e.message ?: "Network error")
         }
@@ -101,7 +103,7 @@ object RingSession {
         RingWidget.refreshAll(app)
     }
 
-    /** A host has just been seen online: the active ring is no longer waiting on an offline host. */
+    /** A host is known to be online right now: the active ring is no longer waiting on an offline host. */
     fun hostSeen(ctx: Context) {
         val app = ctx.applicationContext
         val p = prefs(app)
@@ -124,24 +126,56 @@ object RingSession {
             ntfy.publish(RingEvent(type = RingEvent.RING, id = id, name = name))
             p.edit().putLong(KEY_PUB, now).apply()
         } catch (_: Exception) {
-            // try again on the next heartbeat
+            // try again the next time a host comes online
         }
     }
 
-    /** Looks for a recent host heartbeat and records the result. A failed check counts as "online". */
-    private fun checkHostsOnline(app: Context): Boolean {
-        val online = try {
-            ntfy.poll("10m").any { it.event.type == RingEvent.HEARTBEAT }
+    /**
+     * Asks "is any host online?" and waits a few seconds for an answer. Returns true if a host
+     * answered; false means every host is offline (the ring stays queued for when one returns).
+     * An inconclusive check (no network) counts as online. Records the result for the widget.
+     * Blocking: call off the main thread, and not on the thread that publishes cancels.
+     */
+    fun checkHostsOnline(ctx: Context): Boolean {
+        val app = ctx.applicationContext
+        val id = activeId(app) ?: return true
+        val pingId = RingEvent.newId()
+        var answered = false
+        var failed = false
+        val sub = Subscription()
+        val timer = Thread {
+            try {
+                Thread.sleep(PONG_WAIT_MS)
+                sub.cancel()
+            } catch (_: InterruptedException) {
+            }
+        }.apply { isDaemon = true; start() }
+        try {
+            ntfy.publish(RingEvent(type = RingEvent.PING, id = pingId))
+            // Replaying the last 30 s catches a pong that arrived before the stream opened.
+            ntfy.stream("30s", sub, onOpen = {}) { inc ->
+                if (inc.event.type == RingEvent.PONG && inc.event.id == pingId) {
+                    answered = true
+                    sub.cancel()
+                }
+            }
         } catch (_: Exception) {
-            true
+            if (!sub.cancelled) failed = true
         }
-        prefs(app).edit().putBoolean(KEY_OFFLINE, !online).apply()
+        timer.interrupt()
+        val online = answered || failed
+        val p = prefs(app)
+        if (p.getString(KEY_ID, null) == id) {
+            p.edit().putBoolean(KEY_OFFLINE, !online).apply()
+            RingWidget.refreshAll(app)
+        }
         return online
     }
 
     /** True if the host dismissed this ring, or it was cancelled. Throws if the check can't be made. */
-    private fun isFinished(id: String): Boolean =
-        ntfy.poll("all").any { inc ->
+    private fun isFinished(id: String, sentAtMs: Long): Boolean =
+        // Only messages since this ring was sent (minus a margin for clock differences): keeps the request small.
+        ntfy.poll(((sentAtMs / 1000) - 300).coerceAtLeast(0).toString()).any { inc ->
             val e = inc.event
             (e.type == RingEvent.DISMISSED && id in e.ids) || (e.type == RingEvent.CANCEL && e.id == id)
         }

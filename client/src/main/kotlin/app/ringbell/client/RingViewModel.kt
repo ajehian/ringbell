@@ -75,21 +75,28 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
                 is RingSession.Result.AlreadyRinging -> r.id
                 is RingSession.Result.Failed -> null
             }
-            when (r) {
-                is RingSession.Result.Sent -> _hostsOffline.value = !r.hostsOnline
-                is RingSession.Result.AlreadyRinging -> _hostsOffline.value = !r.hostsOnline
-                is RingSession.Result.Failed -> {}
-            }
             if (id != null) {
                 ringId = id // set even if the user already pressed Cancel, so that cancel targets it
                 if (_status.value is Status.Sending) {
                     _status.value = Status.Ringing
                     listenForDismiss(id)
+                    checkHosts(id)
                 }
             } else if (_status.value is Status.Sending) {
                 _status.value = Status.Failed((r as RingSession.Result.Failed).message)
             }
         }
+    }
+
+    /**
+     * Pings the hosts in the background (not on [io], so Cancel is never kept waiting) and shows
+     * the "all hosts offline" note if nobody answers.
+     */
+    private fun checkHosts(id: String) {
+        Thread {
+            val online = RingSession.checkHostsOnline(getApplication<Application>())
+            if (ringId == id && _status.value is Status.Ringing) _hostsOffline.value = !online
+        }.apply { isDaemon = true }.start()
     }
 
     /** Withdraw the ring. Only possible while the host has not dismissed it. */
@@ -128,7 +135,7 @@ class RingViewModel(app: Application) : AndroidViewModel(app) {
                 try {
                     // The ring may be days old, so replay everything the server still has.
                     ntfy.stream("all", s, onOpen = { delayMs = 1000L }) { inc ->
-                        if (inc.event.type == RingEvent.HEARTBEAT &&
+                        if ((inc.event.type == RingEvent.HELLO || inc.event.type == RingEvent.PONG) &&
                             System.currentTimeMillis() - inc.timeMs < RingSession.HOST_FRESH_MS
                         ) {
                             _hostsOffline.value = false
