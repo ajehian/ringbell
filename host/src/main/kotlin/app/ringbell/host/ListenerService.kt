@@ -101,9 +101,8 @@ class ListenerService : Service() {
                     onOpen = {
                         backoff = 2_000L
                         Conn.set(true, "Listening")
-                        Actions.heartbeat(force = true)
+                        Actions.hello()
                     },
-                    onKeepalive = { Actions.heartbeat() },
                 ) { inc ->
                     handle(inc)
                     if (inc.ntfyId.isNotEmpty()) prefs.edit().putString("last_id", inc.ntfyId).apply()
@@ -138,6 +137,9 @@ class ListenerService : Service() {
                 state = RingState.RINGING,
             )
             RingEvent.CANCEL -> History.resolve(listOf(ev.id), RingState.CANCELLED)
+            // Only answer live pings; one replayed while catching up is long over.
+            RingEvent.PING ->
+                if (System.currentTimeMillis() - inc.timeMs < PING_FRESH_MS) Actions.pong(ev.id)
             // Dismissed on another host (or by us, a no-op): also covers catching up after being offline.
             RingEvent.DISMISSED -> History.resolve(ev.ids, RingState.DISMISSED)
         }
@@ -155,6 +157,8 @@ class ListenerService : Service() {
     }
 
     companion object {
+        private const val PING_FRESH_MS = 60_000L
+
         fun start(ctx: Context) {
             androidx.core.content.ContextCompat.startForegroundService(ctx, Intent(ctx, ListenerService::class.java))
         }
